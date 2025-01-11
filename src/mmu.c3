@@ -9,9 +9,11 @@ import std::io;
 struct Mmu {
     Cartridge cartridge;
     char[0x8000] ram;
-    Joypad* joypad; //TODO: I don't like this here, maybe have a BUS or something everything can route through?
     //state
+    ushort dma_transfer_cycles_remaining;
     VideoAccess video_access;
+
+    Joypad* joypad; //TODO: I don't like this here, maybe have a BUS or something everything can route through?
 }
 
 enum VideoAccess {
@@ -28,6 +30,8 @@ fn Mmu init(Cartridge cartridge, Joypad* joypad) {
     mmu.ram[0xFF40 - RAM_START] = 0x91; //LCDC
     mmu.ram[0xFF41 - RAM_START] = 0x85; //LCD STAT
     mmu.ram[0xFFFF - RAM_START] = 1; //interrupt enable
+
+    mmu.dma_transfer_cycles_remaining = 0;
 
     mmu.joypad = joypad;
     mmu.video_access = EVERYTHING;
@@ -95,6 +99,12 @@ fn char Mmu.read(&self, ushort address) {
         return self.cartridge.read(address);
     }
 
+    if (self.dma_transfer_cycles_remaining > 0 && address >= RAM_START) {
+        if (address < 0xFF80 || address > 0xFFFE) {
+            return 0x00;
+        }
+    }
+
     if (self.video_access == VRAM_INACCESSIBLE && ((address >= 0x8000 && address <= 0x9FFF) || (address >= 0xFE00 && address <= 0xFE9F))) {
         return 0xFF;
     }
@@ -126,12 +136,19 @@ fn void Mmu.write(&self, ushort address, char value) {
     if (address == IF_REGISTER) {
         return;
     }
+
+    if (self.dma_transfer_cycles_remaining > 0) {
+        if (address < 0xFF80 || address > 0xFFFE) {
+            return;
+        }
+    }
+
     // if (self.video_access == VRAM_INACCESSIBLE && ((address >= 0x8000 && address <= 0x9FFF) || (address >= 0xFE00 && address <= 0xFE9F))) {
     //     return;
     // }
-    // if (self.video_access == OAM_INACCESSIBLE && address >= 0xFE00 && address <= 0xFE9F) {
-    //     return;
-    // }
+    if (self.video_access == OAM_INACCESSIBLE && address >= 0xFE00 && address <= 0xFE9F) {
+        return;
+    }
 
     if (address == JOYPAD_REGISTER) {
         //only write to high nibble
@@ -139,8 +156,15 @@ fn void Mmu.write(&self, ushort address, char value) {
         return;
     }
 
+    if (address == LCD_STAT_REGISTER) {
+        //only write top 5 bits
+        self.ram[LCD_STAT_REGISTER - RAM_START] = ((value & 0b11111000) | (self.ram[LCD_STAT_REGISTER - RAM_START] & 0b00000111));
+        return;
+    }
+
     if (address == OAM_DMA_REGISTER) {
-        self.oam_dma_transfer(value);
+        self.dma_transfer_cycles_remaining = 640;
+        self.ram[address - RAM_START] = value;
         return;
     }
 
@@ -165,20 +189,14 @@ fn void Mmu.write_bit(&self, ushort address, char bit, bool value) {
     }
 }
 
-//Big TODO: The MMU should be subject to TCycles as well, and also have a concept of a state
-fn void Mmu.oam_dma_transfer(&self, char src_addr) {
-    //this should take 160 MCycles...
-    //and also block all reads/writes outside of HRAM 0xFF80-0xFFFE
+fn void Mmu.oam_dma_transfer_cycle(&self) {
 
-    ushort start = src_addr << 8;
-    for (ushort offset = 0; offset <= 0x9F; offset++) {
-        //each one of these should take 4 t_cycles...
-        if (start + offset < RAM_START) {
-            self.ram[0xFE00 + offset - RAM_START] = self.cartridge.read(start + offset);
-        } else {
-            self.ram[0xFE00 + offset - RAM_START] = self.ram[start + offset - RAM_START];
-        }
-    }
+    ushort start = ((ushort)self.read_unchecked(OAM_DMA_REGISTER)) << 8;
+    ushort offset = (640 - self.dma_transfer_cycles_remaining) / 4;
+
+    // io::printfn("transferring 0x%04X to 0x%04X, cycles left: %d", start + offset, 0xFE00 + offset, self.dma_transfer_cycles_remaining);
+    
+    self.write_unchecked(0xFE00 + offset, self.read_unchecked(start + offset));
 }
 
 fn void Mmu.set_interrupt_flag(&self, Interrupt interrupt) {

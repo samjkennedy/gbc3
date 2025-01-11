@@ -8,15 +8,15 @@ struct Joypad {
     char state;
 }
 
-enum JoypadButton: char (char bit) {
-    START = 4,
-    SELECT = 2,
-    B = 1,
-    A = 0,
-    DOWN = 4,
-    UP = 3,
-    LEFT = 2,
-    RIGHT = 1,
+enum JoypadButton: char {
+    START,
+    SELECT,
+    B,
+    A, 
+    DOWN,
+    UP,
+    LEFT,
+    RIGHT,
 }
 
 enum ButtonMode {

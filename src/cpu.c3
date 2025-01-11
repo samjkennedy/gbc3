@@ -97,7 +97,7 @@ fn void! Cpu.tick(&self, Mmu* mmu) {
     //update DIV register
     if (self.clk % DIV_FREQUENCY == 0) {
         char div = mmu.read(mmu::DIV_REGISTER);
-        mmu.write(mmu::DIV_REGISTER, div + 1);
+        mmu.write_unchecked(mmu::DIV_REGISTER, div + 1);
     }
 
     //update TIMA register
@@ -122,21 +122,26 @@ fn void! Cpu.tick(&self, Mmu* mmu) {
             if (tima == 0xFF) {
                 //TODO: set interrupt flag
                 mmu.set_interrupt_flag(mmu::Interrupt.TIMER);
-                mmu.write(mmu::TIMA_REGISTER, mmu.read(mmu::TMA_REGISTER));
+                mmu.write_unchecked(mmu::TIMA_REGISTER, mmu.read(mmu::TMA_REGISTER));
             } else {
-                mmu.write(mmu::TIMA_REGISTER, tima + 1);
+                mmu.write_unchecked(mmu::TIMA_REGISTER, tima + 1);
             }
         }
     }
 
     //handle interrupts
-   
-    if (self.state != HALT) { //"the CPU simply wakes up, and before executing the instruction after the halt, the interrupt handler is called normally."
-        self.handle_interrupt(mmu::Interrupt.V_BLANK, mmu);
-        self.handle_interrupt(mmu::Interrupt.STAT, mmu);
-        self.handle_interrupt(mmu::Interrupt.TIMER, mmu);
-        self.handle_interrupt(mmu::Interrupt.SERIAL, mmu);
-        self.handle_interrupt(mmu::Interrupt.JOYPAD, mmu);
+    //I believe interrupts are actioned 1 tick before the next fetch
+    if (self.remaining_cycles % 4 == 1) {
+        self.handle_interrupts(mmu);
+    }
+
+    //OAM DMA Transfer
+    //I'm not entirely happy with this being how I do it, but I can't think of anything better right now
+    if (mmu.dma_transfer_cycles_remaining > 0) {
+        if (mmu.dma_transfer_cycles_remaining % 4 == 0) {
+            mmu.oam_dma_transfer_cycle();
+        }
+        mmu.dma_transfer_cycles_remaining--;
     }
 
     //fetch-decode-execute
@@ -164,6 +169,15 @@ fn void! Cpu.tick(&self, Mmu* mmu) {
     self.clk++;
 }
 
+fn void Cpu.handle_interrupts(&self, Mmu* mmu) {
+       
+    self.handle_interrupt(mmu::Interrupt.V_BLANK, mmu);
+    self.handle_interrupt(mmu::Interrupt.STAT, mmu);
+    self.handle_interrupt(mmu::Interrupt.TIMER, mmu);
+    self.handle_interrupt(mmu::Interrupt.SERIAL, mmu);
+    self.handle_interrupt(mmu::Interrupt.JOYPAD, mmu);
+}
+
 fn void Cpu.handle_interrupt(&self, mmu::Interrupt interrupt, Mmu* mmu) {
 
     if (!self.ime) {
@@ -179,8 +193,8 @@ fn void Cpu.handle_interrupt(&self, mmu::Interrupt interrupt, Mmu* mmu) {
     mmu.clear_interrupt_flag(interrupt);
     
     self.sp -= 2;
-    mmu.write(self.sp, (char) (self.pc & 0x00FF));
-    mmu.write(self.sp + 1, (char) ((self.pc & 0xFF00) >> 8));
+    mmu.write_unchecked(self.sp, (char) (self.pc & 0x00FF));
+    mmu.write_unchecked(self.sp + 1, (char) ((self.pc & 0xFF00) >> 8));
 
     self.pc = interrupt.vector;
     self.remaining_cycles = 20;
