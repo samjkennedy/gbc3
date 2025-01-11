@@ -75,7 +75,7 @@ fn void Ppu.dot(&self, Mmu* mmu) {
             self.current_x++;
 
             if (self.current_x == 160) {
-                // self.draw_objects(mmu, ly);
+                self.draw_objects(mmu, ly);
                 self.set_mode(mmu, H_BLANK);
             }
         }
@@ -248,10 +248,10 @@ fn void Ppu.draw(&self, Mmu* mmu, char scanline) {
         //TODO
     }
 
-    uint obj_pixel = self.get_obj_pixel(mmu, y, x + 1); //WHERE DID THIS +1 COME FROM????
-    if (obj_pixel != 0) {
-        self.pixels[offset] = obj_pixel;
-    }
+    // uint obj_pixel = self.get_obj_pixel(mmu, y, x + 1); //WHERE DID THIS +1 COME FROM????
+    // if (obj_pixel != 0) {
+    //     self.pixels[offset] = obj_pixel;
+    // }
 }
 
 fn uint Ppu.get_bg_pixel(&self, Mmu* mmu, AddressingMode addressing_mode, char y, char x) {
@@ -278,6 +278,63 @@ fn uint Ppu.get_bg_pixel(&self, Mmu* mmu, AddressingMode addressing_mode, char y
         case 2: return DEFAULT_GB_PALETTE.dark;
         case 3: return DEFAULT_GB_PALETTE.black;
         default: return 0xFFFF00FF;
+    }
+}
+
+//TODO: This isn't how the gameboy does it, but this produces better visuals for now
+fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
+
+    //search the object buffer for any suitable objs
+    foreach (address: self.object_buffer) {
+
+        if (address == 0) break; //reached the end of the buffer, no more objects to render
+
+        char y_pos      = mmu.read_unchecked(address + 0);
+        char x_pos      = mmu.read_unchecked(address + 1);
+        char tile_index = mmu.read_unchecked(address + 2);
+        char attributes = mmu.read_unchecked(address + 3);
+
+        //Get palette info
+        ushort palette_register = util::is_bit_set(attributes, 4)
+            ? mmu::OBP1_REGISTER
+            : mmu::OBP0_REGISTER;
+
+        char palette_data = mmu.read_unchecked(palette_register);
+        uint[4] palette = {};
+        for (int id = 1; id < 4; id++) { //ignore 2 lower bits as colour index 0 is transparency for objects
+            char value = (palette_data & (0b11 << (2 * id))) >> (2 * id);
+            switch (value) {
+                case 0: palette[id] = DEFAULT_GB_PALETTE.white;
+                case 1: palette[id] = DEFAULT_GB_PALETTE.light;
+                case 2: palette[id] = DEFAULT_GB_PALETTE.dark;
+                case 3: palette[id] = DEFAULT_GB_PALETTE.black;
+            }
+        }
+
+        //TODO: Get correct VRAM bank from attribute bit 3
+        bool y_flip = util::is_bit_set(attributes, 6);
+        bool x_flip = util::is_bit_set(attributes, 5);
+        
+        // char priority = util::get_bit(attributes, 7);
+        // if (priority == 1) {
+        //     //BG and Window colors 1–3 are drawn over this OBJ
+        //     return 0;
+        // }
+        
+        char y = scanline - (y_pos - 16);
+        char row = y_flip ? 7 - y : y;
+
+        char[8] tile_row = get_tile_row(mmu, AddressingMode.MODE_8000, tile_index, row);
+
+        for (char x = 0; x < 8; x ++) {
+
+            char col = x_flip ? 7 - x : x;
+            
+            uint pixel = palette[tile_row[col]];
+            if (pixel != 0) {
+                self.pixels[(y_pos - 16 + y) * 256u16 + (x_pos - 8) + x] = pixel;
+            }
+        }
     }
 }
 
