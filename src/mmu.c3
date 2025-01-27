@@ -10,7 +10,6 @@ struct Mmu {
     Cartridge cartridge;
     char[0x8000] ram;
     //state
-    ushort dma_transfer_cycles_remaining;
     VideoAccess video_access;
 
     Joypad* joypad; //TODO: I don't like this here, maybe have a BUS or something everything can route through?
@@ -30,8 +29,6 @@ fn Mmu init(Cartridge cartridge, Joypad* joypad) {
     mmu.ram[0xFF40 - RAM_START] = 0x91; //LCDC
     mmu.ram[0xFF41 - RAM_START] = 0x85; //LCD STAT
     mmu.ram[0xFFFF - RAM_START] = 1; //interrupt enable
-
-    mmu.dma_transfer_cycles_remaining = 0;
 
     mmu.joypad = joypad;
     mmu.video_access = EVERYTHING;
@@ -99,11 +96,11 @@ fn char Mmu.read(&self, ushort address) {
         return self.cartridge.read(address);
     }
 
-    if (self.dma_transfer_cycles_remaining > 0 && address >= RAM_START) {
-        if (address < 0xFF80 || address > 0xFFFE) {
-            return 0x00;
-        }
-    }
+    // if (self.dma_transfer_cycles_remaining > 0 && address >= RAM_START) {
+    //     if (address < 0xFF80 || address > 0xFFFE) {
+    //         return 0x00;
+    //     }
+    // }
 
     if (self.video_access == VRAM_INACCESSIBLE && ((address >= 0x8000 && address <= 0x9FFF) || (address >= 0xFE00 && address <= 0xFE9F))) {
         return 0xFF;
@@ -137,11 +134,11 @@ fn void Mmu.write(&self, ushort address, char value) {
         return;
     }
 
-    if (self.dma_transfer_cycles_remaining > 0) {
-        if (address < 0xFF80 || address > 0xFFFE) {
-            return;
-        }
-    }
+    // if (self.dma_transfer_cycles_remaining > 0) {
+    //     if (address < 0xFF80 || address > 0xFFFE) {
+    //         return;
+    //     }
+    // }
 
     // if (self.video_access == VRAM_INACCESSIBLE && ((address >= 0x8000 && address <= 0x9FFF) || (address >= 0xFE00 && address <= 0xFE9F))) {
     //     return;
@@ -163,8 +160,8 @@ fn void Mmu.write(&self, ushort address, char value) {
     }
 
     if (address == OAM_DMA_REGISTER) {
-        self.dma_transfer_cycles_remaining = 640;
         self.ram[address - RAM_START] = value;
+        self.oam_dma_transfer();
         return;
     }
 
@@ -189,14 +186,14 @@ fn void Mmu.write_bit(&self, ushort address, char bit, bool value) {
     }
 }
 
-fn void Mmu.oam_dma_transfer_cycle(&self) {
+//TODO: This should take 640 cycles
+fn void Mmu.oam_dma_transfer(&self) {
 
     ushort start = ((ushort)self.read_unchecked(OAM_DMA_REGISTER)) << 8;
-    ushort offset = (640 - self.dma_transfer_cycles_remaining) / 4;
 
-    // io::printfn("transferring 0x%04X to 0x%04X, cycles left: %d", start + offset, 0xFE00 + offset, self.dma_transfer_cycles_remaining);
-    
-    self.write_unchecked(0xFE00 + offset, self.read_unchecked(start + offset));
+    for (char offset = 0x00; offset < 0x9F; offset++) {
+        self.write_unchecked(0xFE00 + offset, self.read_unchecked(start + offset));
+    }    
 }
 
 fn void Mmu.set_interrupt_flag(&self, Interrupt interrupt) {

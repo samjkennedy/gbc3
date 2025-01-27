@@ -137,12 +137,12 @@ fn void! Cpu.tick(&self, Mmu* mmu) {
 
     //OAM DMA Transfer
     //I'm not entirely happy with this being how I do it, but I can't think of anything better right now
-    if (mmu.dma_transfer_cycles_remaining > 0) {
-        if (mmu.dma_transfer_cycles_remaining % 4 == 0) {
-            mmu.oam_dma_transfer_cycle();
-        }
-        mmu.dma_transfer_cycles_remaining--;
-    }
+    // if (mmu.dma_transfer_cycles_remaining > 0) {
+    //     if (mmu.dma_transfer_cycles_remaining % 4 == 0) {
+    //         mmu.oam_dma_transfer_cycle();
+    //     }
+    //     mmu.dma_transfer_cycles_remaining--;
+    // }
 
     //fetch-decode-execute
     switch (self.state) {

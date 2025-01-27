@@ -58,7 +58,9 @@ fn void! main(String[] args)
     };
     rl::Texture2D texture = rl::loadTextureFromImage(image);
 
-    rl::setTargetFPS(60); //Technically should be 59.7 but we'll burn that bridge when we come to it
+    // bool paused = false;
+
+    rl::setTargetFPS(6); //Technically should be 59.7 but we'll burn that bridge when we come to it
     for (int t = 0; !rl::windowShouldClose(); t++) @pool() {
 
         handle_inputs(&mmu, &joypad);
@@ -71,11 +73,6 @@ fn void! main(String[] args)
                 rl::clearBackground(rl::Color {0xE0, 0xF8, 0xD0, 0xFF});
 
                 rl::updateTexture(texture, (void*)&ppu.pixels);
-
-                char scroll_y = mmu.read(mmu::SCY_REGISTER);
-                char scroll_x = mmu.read(mmu::SCX_REGISTER);
-
-                rl::setTextureWrap(texture, 0);
 
                 rl::drawTexturePro(
                     texture, 

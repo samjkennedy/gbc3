@@ -8,8 +8,11 @@ import std::io;
 struct Ppu {
     uint[256 * 256] pixels;
     ushort[10] object_buffer;
-    PpuMode mode;
+    char[8] bg_tile;
+    char scroll_x;
+    char scroll_y;
     //Throw some state here, figure out a better setup later
+    PpuMode mode;
     uint remaining_dots;
     char current_x;
 }
@@ -18,6 +21,9 @@ fn Ppu init() {
     return Ppu {
         .pixels = {},
         .object_buffer = {},
+        .bg_tile = {},
+        .scroll_x = 0,
+        .scroll_y = 0,
         .mode = PpuMode.OAM_SCAN,
         .remaining_dots = 80,
         .current_x = 0,
@@ -56,28 +62,62 @@ fn void Ppu.dot(&self, Mmu* mmu) {
     
     char ly = mmu.read_unchecked(mmu::LY_REGISTER);
 
-    // io::printfn("scanline: %d", ly);
+    //LYC == LY (Read-only): Set when LY contains the same value as LYC; it is constantly updated.
+    char lyc = mmu.read_unchecked(mmu::LYC_REGISTER);
+    if (lyc == ly) {
+        mmu.write_bit(mmu::LCD_STAT_REGISTER, 2, true);
+
+        //LYC int select (Read/Write): If set, selects the LYC == LY condition for the STAT interrupt.
+        if (util::is_bit_set(mmu.read(mmu::LCD_STAT_REGISTER), 6)) {
+            mmu.set_interrupt_flag(mmu::Interrupt.STAT);
+        }
+    } else {
+        mmu.write_bit(mmu::LCD_STAT_REGISTER, 2, false);
+    }
 
     switch (self.mode) {
         case OAM_SCAN: {
             //Probably not the smartest way but once we've had 80 dots just do the whole scan in one
             // this might cause timing issues with the cpu though...
-            // need a "futures" library
+            // use tsoding's "futures" library? https://github.com/tsoding/c3fut
             if (self.remaining_dots == 0) {
                 self.oam_scan(mmu, ly);
                 self.set_mode(mmu, DRAWING);
                 self.current_x = 0;
             }
         }
-        case DRAWING: {        
+        case DRAWING: {
 
-            self.draw(mmu, ly);
-            self.current_x++;
+            //TODO: Have a char[8] tile buffer updated on each fetch?
 
+            //The scroll registers are re-read on each tile fetch, 
+            if (self.current_x % 8 == 0) { //crude approximation of tile fetching, in future fetch for self.bg_tile
+                self.scroll_y = mmu.read_unchecked(mmu::SCY_REGISTER);
+                self.scroll_x = mmu.read_unchecked(mmu::SCX_REGISTER);
+            }
+            //except for the low 3 bits of SCX, which are only read at the beginning of the scanline (for the initial shifting of pixels).
+            // if (self.current_x == 0) {
+            //     self.scroll_x = self.scroll_x | (mmu.read_unchecked(mmu::SCX_REGISTER) & 0b0000_0111);
+            // }
+
+            if (!util::is_bit_set(mmu.read(mmu::LCDC_REGISTER), 7)) {
+                
+                ushort offset = (((ushort)ly ) * 256u16) + self.current_x;
+                self.pixels[offset] = DEFAULT_GB_PALETTE.white;
+                self.current_x++;
+                break;
+            }
+
+            self.draw_pixel(mmu, ly, self.current_x);
             if (self.current_x == 160) {
-                self.draw_objects(mmu, ly);
+
+                if (util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 1)) {
+                    // self.draw_objects(mmu, ly);
+                }
+                
                 self.set_mode(mmu, H_BLANK);
             }
+            self.current_x++;
         }
         case H_BLANK: {
 
@@ -85,20 +125,6 @@ fn void Ppu.dot(&self, Mmu* mmu) {
             if (self.remaining_dots == 0) {
 
                 self.current_x = 0;
-
-                char lyc = mmu.read_unchecked(mmu::LYC_REGISTER);
-
-                //LYC == LY (Read-only): Set when LY contains the same value as LYC; it is constantly updated.
-                if (lyc == ly) {
-                    mmu.write_bit(mmu::LCD_STAT_REGISTER, 2, true);
-
-                    //LYC int select (Read/Write): If set, selects the LYC == LY condition for the STAT interrupt.
-                    if (util::is_bit_set(mmu.read(mmu::LCD_STAT_REGISTER), 6)) {
-                        mmu.set_interrupt_flag(mmu::Interrupt.STAT);
-                    }
-                } else {
-                    mmu.write_bit(mmu::LCD_STAT_REGISTER, 2, false);
-                }
 
                 char scanline = (ly + 1) % 154;
                 mmu.write_unchecked(mmu::LY_REGISTER, scanline);
@@ -147,7 +173,7 @@ fn void Ppu.set_mode(&self, Mmu* mmu, PpuMode mode) {
             mmu.write_bit(mmu::LCD_STAT_REGISTER, 0, false);
             mmu.write_bit(mmu::LCD_STAT_REGISTER, 1, false);
 
-            if (util::is_bit_set(mmu.read(mmu::LCD_STAT_REGISTER), 3)) {
+            if (util::is_bit_set(mmu.read_unchecked(mmu::LCD_STAT_REGISTER), 3)) {
                 mmu.set_interrupt_flag(mmu::Interrupt.STAT);
             }
 
@@ -158,7 +184,9 @@ fn void Ppu.set_mode(&self, Mmu* mmu, PpuMode mode) {
             mmu.write_bit(mmu::LCD_STAT_REGISTER, 0, true);
             mmu.write_bit(mmu::LCD_STAT_REGISTER, 1, false);
 
-            if (util::is_bit_set(mmu.read(mmu::LCD_STAT_REGISTER), 4)) {
+            //Disable PPU + LCD
+
+            if (util::is_bit_set(mmu.read_unchecked(mmu::LCD_STAT_REGISTER), 4)) {
                 mmu.set_interrupt_flag(mmu::Interrupt.STAT);
             }
 
@@ -189,6 +217,8 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
     self.object_buffer = {};
     char buffer_object_count = 0;
 
+    bool tall_sprites = util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 2);
+
     for (ushort addr = 0xFE00; addr <= 0xFE9F; addr += 4) {
 
         char y_pos = mmu.read_unchecked(addr + 0);
@@ -197,20 +227,20 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
         //An object is only added to the buffer if all of the following conditions apply:
 
         // Sprite X-Position must be greater than 0
-        if (x_pos <= 8) {
-            continue;
-        }
+        // if (x_pos < 0) { //This can't happen with an unsigned char anyway
+        //     continue;
+        // }
         // LY + 16 must be greater than or equal to Sprite Y-Position
         if (scanline + 16 < y_pos) {
             continue;
         }
 
         // LY + 16 must be less than Sprite Y-Position + Sprite Height (8 in Normal Mode, 16 in Tall-Sprite-Mode)
-        if (scanline + 16 >= y_pos + 8) { //TODO: 16 tall-sprite-mode
+        if (scanline + 16 >= y_pos + (tall_sprites ? 16 : 8)) { //TODO: 16 tall-sprite-mode
             continue;
         }
         // The amount of sprites already stored in the OAM Buffer must be less than 10
-        if (buffer_object_count >= self.object_buffer.len) {
+        if (buffer_object_count >= 10) {
             return;
         }
 
@@ -219,39 +249,26 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
     }
 }
 
-fn void Ppu.draw(&self, Mmu* mmu, char scanline) {
-    
-    char lcdc = mmu.read(mmu::LCDC_REGISTER);
+fn void Ppu.draw_pixel(&self, Mmu* mmu, char y, char x) {
 
     //eventually use the pixel fetcher/mixer and buffers but for now do it slowly pixel by pixel inefficiently
 
+    char lcdc = mmu.read_unchecked(mmu::LCDC_REGISTER);
     AddressingMode addressing_mode = util::is_bit_set(lcdc, 4)
         ? MODE_8000 
         : MODE_8800;
 
-    char y = scanline;
-    char x = self.current_x;
-    ushort offset = (((ushort)y ) * 256u16) + x;
+    ushort offset = (((ushort)y) * 256u16) + x;
     
     //Background
-    {
-        char scroll_y = mmu.read(mmu::SCY_REGISTER);
-        char scroll_x = mmu.read(mmu::SCX_REGISTER);
-
-        uint bg_pixel = self.get_bg_pixel(mmu, addressing_mode, y + scroll_y, x + scroll_x);
-
-        self.pixels[offset] = bg_pixel;
+    if (util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 0)) {
+        self.pixels[offset] = self.get_bg_pixel(mmu, addressing_mode, y + self.scroll_y, x + self.scroll_x);
     }
 
     //Window
     {
         //TODO
     }
-
-    // uint obj_pixel = self.get_obj_pixel(mmu, y, x + 1); //WHERE DID THIS +1 COME FROM????
-    // if (obj_pixel != 0) {
-    //     self.pixels[offset] = obj_pixel;
-    // }
 }
 
 fn uint Ppu.get_bg_pixel(&self, Mmu* mmu, AddressingMode addressing_mode, char y, char x) {
@@ -286,7 +303,6 @@ fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
 
     //search the object buffer for any suitable objs
     foreach (address: self.object_buffer) {
-
         if (address == 0) break; //reached the end of the buffer, no more objects to render
 
         char y_pos      = mmu.read_unchecked(address + 0);
