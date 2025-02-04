@@ -73,11 +73,21 @@ enum Interrupt: char (char bit, ushort vector) {
     JOYPAD = {4, 0x0060},
 }
 
-//This function is used to write to the memory without any restrictions the GB would apply, e.g. not writing to specific addresses
+//This function is used to write to the memory without any restrictions the GB would apply, e.g. not writing to specific addresses during drawing
 fn void Mmu.write_unchecked(&self, ushort address, char value) {
     if (address < RAM_START) {
         return;
     } else {
+        if (address == LY_REGISTER) {
+
+            self.ram[address - RAM_START] = value;
+
+            char lyc = self.read_unchecked(LYC_REGISTER);
+            char ly = self.read_unchecked(LY_REGISTER);
+            self.lyc_ly_interrupt(lyc, ly);
+            return;
+        }
+
         self.ram[address - RAM_START] = value;
     }
 }
@@ -159,6 +169,16 @@ fn void Mmu.write(&self, ushort address, char value) {
         return;
     }
 
+    if (address == LYC_REGISTER || address == LY_REGISTER) {
+
+        self.ram[address - RAM_START] = value;
+
+        char lyc = self.read_unchecked(LYC_REGISTER);
+        char ly = self.read_unchecked(LY_REGISTER);
+        self.lyc_ly_interrupt(lyc, ly);
+        return;
+    }
+
     if (address == OAM_DMA_REGISTER) {
         self.ram[address - RAM_START] = value;
         self.oam_dma_transfer();
@@ -170,6 +190,19 @@ fn void Mmu.write(&self, ushort address, char value) {
     self.ram[address - RAM_START] = value;
 
     // io::printfn("wrote 0x%02X to 0x%04X", value, address);
+}
+
+fn void Mmu.lyc_ly_interrupt(&self, char lyc, char ly) {
+    if (lyc == ly) {
+        self.write_bit(mmu::LCD_STAT_REGISTER, 2, true);
+
+        //LYC int select (Read/Write): If set, selects the LYC == LY condition for the STAT interrupt.
+        if (util::is_bit_set(self.read(mmu::LCD_STAT_REGISTER), 6)) {
+            self.set_interrupt_flag(mmu::Interrupt.STAT);
+        }
+    } else {
+        self.write_bit(mmu::LCD_STAT_REGISTER, 2, false);
+    }
 }
 
 fn void Mmu.write_bit(&self, ushort address, char bit, bool value) {

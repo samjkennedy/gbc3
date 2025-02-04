@@ -60,7 +60,7 @@ fn void! main(String[] args)
 
     // bool paused = false;
 
-    rl::setTargetFPS(6); //Technically should be 59.7 but we'll burn that bridge when we come to it
+    rl::setTargetFPS(60); //Technically should be 59.7 but we'll burn that bridge when we come to it
     for (int t = 0; !rl::windowShouldClose(); t++) @pool() {
 
         handle_inputs(&mmu, &joypad);
@@ -71,6 +71,7 @@ fn void! main(String[] args)
         if (t % DOTS_PER_FRAME == 0) {
             rl::@drawing() {
                 rl::clearBackground(rl::Color {0xE0, 0xF8, 0xD0, 0xFF});
+                // rl::clearBackground(rl::BLACK);
 
                 rl::updateTexture(texture, (void*)&ppu.pixels);
 

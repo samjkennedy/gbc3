@@ -61,25 +61,12 @@ fn void Ppu.dot(&self, Mmu* mmu) {
     //https://hacktix.github.io/GBEDG/ppu/#v-blank-mode-1
     
     char ly = mmu.read_unchecked(mmu::LY_REGISTER);
-
-    //LYC == LY (Read-only): Set when LY contains the same value as LYC; it is constantly updated.
-    char lyc = mmu.read_unchecked(mmu::LYC_REGISTER);
-    if (lyc == ly) {
-        mmu.write_bit(mmu::LCD_STAT_REGISTER, 2, true);
-
-        //LYC int select (Read/Write): If set, selects the LYC == LY condition for the STAT interrupt.
-        if (util::is_bit_set(mmu.read(mmu::LCD_STAT_REGISTER), 6)) {
-            mmu.set_interrupt_flag(mmu::Interrupt.STAT);
-        }
-    } else {
-        mmu.write_bit(mmu::LCD_STAT_REGISTER, 2, false);
-    }
+    char lcdc = mmu.read(mmu::LCDC_REGISTER);
 
     switch (self.mode) {
         case OAM_SCAN: {
             //Probably not the smartest way but once we've had 80 dots just do the whole scan in one
             // this might cause timing issues with the cpu though...
-            // use tsoding's "futures" library? https://github.com/tsoding/c3fut
             if (self.remaining_dots == 0) {
                 self.oam_scan(mmu, ly);
                 self.set_mode(mmu, DRAWING);
@@ -95,26 +82,15 @@ fn void Ppu.dot(&self, Mmu* mmu) {
                 self.scroll_y = mmu.read_unchecked(mmu::SCY_REGISTER);
                 self.scroll_x = mmu.read_unchecked(mmu::SCX_REGISTER);
             }
-            //except for the low 3 bits of SCX, which are only read at the beginning of the scanline (for the initial shifting of pixels).
-            // if (self.current_x == 0) {
-            //     self.scroll_x = self.scroll_x | (mmu.read_unchecked(mmu::SCX_REGISTER) & 0b0000_0111);
-            // }
 
-            if (!util::is_bit_set(mmu.read(mmu::LCDC_REGISTER), 7)) {
+            if (!util::is_bit_set(lcdc, 7)) {
                 
                 ushort offset = (((ushort)ly ) * 256u16) + self.current_x;
                 self.pixels[offset] = DEFAULT_GB_PALETTE.white;
-                self.current_x++;
-                break;
-            }
 
-            self.draw_pixel(mmu, ly, self.current_x);
-            if (self.current_x == 160) {
+            } else if (self.current_x == 160) {
 
-                if (util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 1)) {
-                    // self.draw_objects(mmu, ly);
-                }
-                
+                self.draw_scanline(mmu, ly);
                 self.set_mode(mmu, H_BLANK);
             }
             self.current_x++;
@@ -143,12 +119,8 @@ fn void Ppu.dot(&self, Mmu* mmu) {
             
             self.current_x++;
             
-            if (self.remaining_dots % 456 == 0) {
-                char scanline = (ly + 1) % 154;
-                mmu.write_unchecked(mmu::LY_REGISTER, scanline);
-            }
+            if (self.remaining_dots % 456 == 0 || self.remaining_dots == 0) {
 
-            if (self.remaining_dots == 0) {
                 char scanline = (ly + 1) % 154;
                 mmu.write_unchecked(mmu::LY_REGISTER, scanline);
                 self.current_x = 0;
@@ -217,9 +189,15 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
     self.object_buffer = {};
     char buffer_object_count = 0;
 
-    bool tall_sprites = util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 2);
+    bool is16x8 = util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 2);
 
+    short last_x = -1;
     for (ushort addr = 0xFE00; addr <= 0xFE9F; addr += 4) {
+        
+        // The amount of sprites already stored in the OAM Buffer must be less than 10
+        if (buffer_object_count >= 10) {
+            return;
+        }
 
         char y_pos = mmu.read_unchecked(addr + 0);
         char x_pos = mmu.read_unchecked(addr + 1);
@@ -227,21 +205,22 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
         //An object is only added to the buffer if all of the following conditions apply:
 
         // Sprite X-Position must be greater than 0
-        // if (x_pos < 0) { //This can't happen with an unsigned char anyway
-        //     continue;
-        // }
+        //This can't happen with an unsigned char anyway
+
+        //Overlapping x priority
+        if (last_x == x_pos) {
+            continue;
+        }
+        last_x = x_pos;
+ 
         // LY + 16 must be greater than or equal to Sprite Y-Position
         if (scanline + 16 < y_pos) {
             continue;
         }
 
         // LY + 16 must be less than Sprite Y-Position + Sprite Height (8 in Normal Mode, 16 in Tall-Sprite-Mode)
-        if (scanline + 16 >= y_pos + (tall_sprites ? 16 : 8)) { //TODO: 16 tall-sprite-mode
+        if (scanline + 16 >= y_pos + (is16x8 ? 16 : 8)) {
             continue;
-        }
-        // The amount of sprites already stored in the OAM Buffer must be less than 10
-        if (buffer_object_count >= 10) {
-            return;
         }
 
         self.object_buffer[buffer_object_count] = addr;
@@ -249,57 +228,161 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
     }
 }
 
-fn void Ppu.draw_pixel(&self, Mmu* mmu, char y, char x) {
+fn void Ppu.draw_scanline(&self, Mmu* mmu, char ly) {
 
-    //eventually use the pixel fetcher/mixer and buffers but for now do it slowly pixel by pixel inefficiently
+    bool background = false;
+    bool window = true;
+    bool obj = false;
 
     char lcdc = mmu.read_unchecked(mmu::LCDC_REGISTER);
+
+    if (background && util::is_bit_set(lcdc, 0)) {
+        self.draw_bg_line(mmu, ly);
+    }
+
+    if (window && util::is_bit_set(lcdc, 0) && util::is_bit_set(lcdc, 5)) {
+        self.draw_window_line(mmu, ly);
+    }
+    
+    if (obj && util::is_bit_set(lcdc, 1)) {
+        self.draw_objects(mmu, ly);
+    }
+}
+
+fn void Ppu.draw_bg_line(&self, Mmu* mmu, ushort screen_y) {
+
+    char lcdc = mmu.read_unchecked(mmu::LCDC_REGISTER);
+    
     AddressingMode addressing_mode = util::is_bit_set(lcdc, 4)
         ? MODE_8000 
         : MODE_8800;
 
-    ushort offset = (((ushort)y) * 256u16) + x;
-    
-    //Background
-    if (util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 0)) {
-        self.pixels[offset] = self.get_bg_pixel(mmu, addressing_mode, y + self.scroll_y, x + self.scroll_x);
-    }
+    char palette_data = mmu.read_unchecked(mmu::BGP_REGISTER);
 
-    //Window
-    {
-        //TODO
+    const char TILE_LENGTH = 8;
+    const char TILES_PER_LINE = 32;
+
+    for (ushort screen_x = 0; screen_x < 256; screen_x += 8) {
+        //Scroll the screen
+        char scrolled_y = (char)screen_y + self.scroll_y;
+        char scrolled_x = (char)screen_x + self.scroll_x;
+
+        char tile_row = scrolled_y / TILE_LENGTH; //row of the tile on the screen
+        char tile_col = scrolled_x / TILE_LENGTH; //col of the tile on the screen
+
+        char tile_y = scrolled_y % TILE_LENGTH; //the row of pixels in the tile itself
+
+        //Get address index of the current tile
+        ushort bg_tile_data_area_start = util::is_bit_set(lcdc, 3)
+            ? 0x9C00
+            : 0x9800;
+        ushort tile_idx = ((ushort)tile_row * TILES_PER_LINE) + tile_col;
+
+        ushort address = bg_tile_data_area_start + tile_idx;
+
+        //Get the tile index
+        char tile_id = mmu.read_unchecked(address);
+
+        char[8] pixel_row = get_tile_row(mmu, addressing_mode, tile_id, tile_y);
+
+        for (char x = 0; x < 8; x++) {
+
+            ushort offset = (screen_y * 256u16) + screen_x + x;
+
+            // if (x == 0 || screen_y % 8 == 0) {
+            //     self.pixels[offset] = 0xFFFF00FF;
+            //     continue;
+            // }
+
+            char pixel = pixel_row[x];
+            char value = (palette_data & (0b11 << (2 * pixel))) >> (2 * pixel);
+
+            switch (value) {
+                case 0: self.pixels[offset] = DEFAULT_GB_PALETTE.white;
+                case 1: self.pixels[offset] = DEFAULT_GB_PALETTE.light;
+                case 2: self.pixels[offset] = DEFAULT_GB_PALETTE.dark;
+                case 3: self.pixels[offset] = DEFAULT_GB_PALETTE.black;
+                default: self.pixels[offset] = 0xFFFF00FF;
+            }
+            
+        } 
     }
 }
 
-fn uint Ppu.get_bg_pixel(&self, Mmu* mmu, AddressingMode addressing_mode, char y, char x) {
-    char row = y / 0x08;
-    char tile_y = y % 0x08;
-    ushort address_offset = ((ushort)row) * 0x20;
 
-    ushort bg_tile_data_area_start = util::is_bit_set(mmu.read_unchecked(mmu::LCDC_REGISTER), 3)
-        ? 0x9C00 + address_offset
-        : 0x9800 + address_offset;
+fn void Ppu.draw_window_line(&self, Mmu* mmu, ushort screen_y) {
 
-    char tile_x = x % 8;
-    ushort address = bg_tile_data_area_start + (x / 8);
-
-    char tile_idx = mmu.read_unchecked(address);
-    char pixel = get_tile_pixel(mmu, addressing_mode, tile_idx, tile_y, tile_x);
+    char lcdc = mmu.read_unchecked(mmu::LCDC_REGISTER);
+    
+    AddressingMode addressing_mode = util::is_bit_set(lcdc, 4)
+        ? MODE_8000 
+        : MODE_8800;
 
     char palette_data = mmu.read_unchecked(mmu::BGP_REGISTER);
 
-    char value = (palette_data & (0b11 << (2 * pixel))) >> (2 * pixel);
-    switch (value) {
-        case 0: return DEFAULT_GB_PALETTE.white;
-        case 1: return DEFAULT_GB_PALETTE.light;
-        case 2: return DEFAULT_GB_PALETTE.dark;
-        case 3: return DEFAULT_GB_PALETTE.black;
-        default: return 0xFFFF00FF;
+    const char TILE_LENGTH = 8;
+    const char TILES_PER_LINE = 32;
+
+    char wy = mmu.read_unchecked(mmu::WY_REGISTER);
+    char wx = mmu.read_unchecked(mmu::WX_REGISTER);
+
+    if (wx > 166 || wy > 143) {
+        return;
+    }
+
+    for (ushort screen_x = 0; screen_x < 256; screen_x += 8) {
+        //Scroll the screen
+        char scrolled_y = (char)screen_y - wy;
+        char scrolled_x = (char)screen_x - wx - 7;
+
+        char tile_row = scrolled_y / TILE_LENGTH; //row of the tile on the screen
+        char tile_col = scrolled_x / TILE_LENGTH; //col of the tile on the screen
+
+        char tile_y = scrolled_y % TILE_LENGTH; //the row of pixels in the tile itself
+
+        //Get address index of the current tile
+        ushort window_tile_data_area_start = util::is_bit_set(lcdc, 6)
+            ? 0x9C00
+            : 0x9800;
+        ushort tile_idx = ((ushort)tile_row * TILES_PER_LINE) + tile_col;
+
+        ushort address = window_tile_data_area_start + tile_idx;
+
+        //Get the tile index
+        char tile_id = mmu.read_unchecked(address);
+
+        char[8] pixel_row = get_tile_row(mmu, addressing_mode, tile_id, tile_y);
+
+        for (char x = 0; x < 8; x++) {
+
+            ushort offset = (screen_y * 256u16) + screen_x + x;
+
+            // if (x == 0 || screen_y % 8 == 0) {
+            //     self.pixels[offset] = 0xFFFF00FF;
+            //     continue;
+            // }
+
+            char pixel = pixel_row[x];
+            char value = (palette_data & (0b11 << (2 * pixel))) >> (2 * pixel);
+
+            switch (value) {
+                case 0: self.pixels[offset] = DEFAULT_GB_PALETTE.white;
+                case 1: self.pixels[offset] = DEFAULT_GB_PALETTE.light;
+                case 2: self.pixels[offset] = DEFAULT_GB_PALETTE.dark;
+                case 3: self.pixels[offset] = DEFAULT_GB_PALETTE.black;
+                default: self.pixels[offset] = 0xFFFF00FF;
+            }
+            
+        } 
     }
 }
 
 //TODO: This isn't how the gameboy does it, but this produces better visuals for now
 fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
+
+    char lcdc = mmu.read_unchecked(mmu::LCDC_REGISTER);
+
+    bool is16x8 = util::is_bit_set(lcdc, 2);
 
     //search the object buffer for any suitable objs
     foreach (address: self.object_buffer) {
@@ -309,6 +392,14 @@ fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
         char x_pos      = mmu.read_unchecked(address + 1);
         char tile_index = mmu.read_unchecked(address + 2);
         char attributes = mmu.read_unchecked(address + 3);
+
+        if (is16x8) {
+            //Bit 0 of tile index for 8x16 objects should be ignored
+            tile_index &= 0b1111_1110;
+            if (scanline >= y_pos) {
+                tile_index++;
+            }
+        }
 
         //Get palette info
         ushort palette_register = util::is_bit_set(attributes, 4)
@@ -331,24 +422,24 @@ fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
         bool y_flip = util::is_bit_set(attributes, 6);
         bool x_flip = util::is_bit_set(attributes, 5);
         
-        // char priority = util::get_bit(attributes, 7);
-        // if (priority == 1) {
-        //     //BG and Window colors 1–3 are drawn over this OBJ
-        //     return 0;
-        // }
-        
         char y = scanline - (y_pos - 16);
-        char row = y_flip ? 7 - y : y;
+        char row = y_flip ? is16x8 ? 15 - y : 7 - y : y;
 
         char[8] tile_row = get_tile_row(mmu, AddressingMode.MODE_8000, tile_index, row);
+        
+        bool priority = util::is_bit_set(attributes, 7);
 
         for (char x = 0; x < 8; x ++) {
+
+            ushort offset = scanline * 256u16 + (x_pos - 8) + x;
 
             char col = x_flip ? 7 - x : x;
             
             uint pixel = palette[tile_row[col]];
             if (pixel != 0) {
-                self.pixels[(y_pos - 16 + y) * 256u16 + (x_pos - 8) + x] = pixel;
+                if (!priority || self.pixels[offset] == DEFAULT_GB_PALETTE.white) {
+                    self.pixels[offset] = pixel;
+                }
             }
         }
     }

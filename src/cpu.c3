@@ -1759,7 +1759,7 @@ fn void Cpu.res_hl(&self, Mmu* mmu, char bit) {
     char mask = ~(1 << bit);
 
     mmu.write(addr, value & mask);
-    
+
     self.remaining_cycles += 12;
 }
 
