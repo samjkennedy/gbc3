@@ -18,7 +18,10 @@ struct Ppu {
 }
 
 fn Ppu init() {
-    return (Ppu) { {}, {}, {}, 0, 0, PpuMode.OAM_SCAN, 80, 0 };
+    return (Ppu) { 
+        .mode = PpuMode.OAM_SCAN, 
+        .remaining_dots = 80
+    };
 }
 
 struct Palette {

@@ -49,7 +49,13 @@ fn void main(String[] args)
 
     rl::initWindow(WINDOW_WIDTH, WINDOW_HEIGHT, (String)cartridge.title());
 
-    rl::Image image = (rl::Image) { (void*)&ppu.pixels, 256, 256, 1, rl::PixelFormat.UNCOMPRESSED_R8G8B8A8 };
+    rl::Image image = (rl::Image) { 
+        .data = (void*)&ppu.pixels, 
+        .width= 256, 
+        .height = 256, 
+        .mipmaps = 1, 
+        .format = rl::PixelFormat.UNCOMPRESSED_R8G8B8A8 
+    };
     rl::Texture2D texture = rl::loadTextureFromImage(image);
 
     // bool paused = false;
