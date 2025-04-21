@@ -25,14 +25,18 @@ struct Cpu {
 }
 
 fn Cpu init() {
-    return Cpu {
-        .af = 0x01B0,
-        .bc = 0x0013,
-        .de = 0x00D8,
-        .hl = 0x014D,
-        .sp = 0xFFFE,
-        .pc = 0x0100,
-        .state = CpuState.FETCH,
+    return (Cpu) {
+        0,      //clk
+        0x01B0, //af
+        0x0013, //bc
+        0x00D8, //de
+        0x014D, //hl
+        0xFFFE, //sp
+        0x0100, //pc
+        CpuState.FETCH, //state
+        0,      //cycles
+        false,  //ime ready
+        false   //ime
     };
 }
 
@@ -91,7 +95,7 @@ fn char get_bit(char value, char bit) {
 
 const ulong DIV_FREQUENCY = 16384; //TODO: different on SGB
 
-fn void! Cpu.tick(&self, Mmu* mmu) {
+fn void? Cpu.tick(&self, Mmu* mmu) {
 
     //handle registers
     //update DIV register
@@ -201,12 +205,9 @@ fn void Cpu.handle_interrupt(&self, mmu::Interrupt interrupt, Mmu* mmu) {
     self.state = FETCH;
 }
 
-fault InstructionFault {
-    NOT_IMPLEMENTED,
-    BAD_INSTRUCTION,
-}
+faultdef NOT_IMPLEMENTED, BAD_INSTRUCTION;
 
-fn void! Cpu.execute(&self, Mmu* mmu) {
+fn void? Cpu.execute(&self, Mmu* mmu) {
 
     char code = self.fetch_byte(mmu);
 
@@ -485,7 +486,7 @@ fn void! Cpu.execute(&self, Mmu* mmu) {
 
         default:
         io::printfn("executing opcode %s is not implemented", code);
-            return InstructionFault.NOT_IMPLEMENTED?;
+            return NOT_IMPLEMENTED?;
     }
 
     //The effect of ei is delayed by one instruction.

@@ -24,7 +24,7 @@ const int WINDOW_HEIGHT = SCREEN_HEIGHT * SCALE;
 const int DOTS_PER_SCANLINE = 456;
 const int DOTS_PER_FRAME = 70224;
 
-fn void! main(String[] args)
+fn void main(String[] args)
 {
     bool enable_logging = false;
 
@@ -49,13 +49,7 @@ fn void! main(String[] args)
 
     rl::initWindow(WINDOW_WIDTH, WINDOW_HEIGHT, (String)cartridge.title());
 
-    rl::Image image = rl::Image {
-        .data = (void*)&ppu.pixels,
-        .width = 256,
-        .height = 256,
-        .format = rl::PixelFormat.UNCOMPRESSED_R8G8B8A8,
-        .mipmaps = 1,
-    };
+    rl::Image image = (rl::Image) { (void*)&ppu.pixels, 256, 256, 1, rl::PixelFormat.UNCOMPRESSED_R8G8B8A8 };
     rl::Texture2D texture = rl::loadTextureFromImage(image);
 
     // bool paused = false;
@@ -70,16 +64,16 @@ fn void! main(String[] args)
 
         if (t % DOTS_PER_FRAME == 0) {
             rl::@drawing() {
-                rl::clearBackground(rl::Color {0xE0, 0xF8, 0xD0, 0xFF});
+                rl::clearBackground((rl::Color) {0xE0, 0xF8, 0xD0, 0xFF});
                 // rl::clearBackground(rl::BLACK);
 
                 rl::updateTexture(texture, (void*)&ppu.pixels);
 
                 rl::drawTexturePro(
                     texture, 
-                    rl::Rectangle { 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT}, //src resolution
-                    rl::Rectangle { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT}, //dst resolution
-                    rl::Vector2 { 0, 0 }, //origin
+                    (rl::Rectangle) { 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT}, //src resolution
+                    (rl::Rectangle) { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT}, //dst resolution
+                    (rl::Vector2) { 0, 0 }, //origin
                     0.0f, //rotation
                     rl::WHITE //tint
                 );

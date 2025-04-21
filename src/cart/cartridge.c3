@@ -58,12 +58,9 @@ enum CartridgeType: char (char code) {
     HUC1_RAM_BATTERY = 0xFF,
 }
 
-fault CartError {
-    UNSUPPORTED_CART_TYPE,
-    BAD_CART_TYPE,
-}
+faultdef UNSUPPORTED_CART_TYPE, BAD_CART_TYPE;
 
-fn Cartridge! parse(File* file) {
+fn Cartridge? parse(File* file) {
 
     char[0x14F] header = {};
     file.read(&header)!!;
@@ -93,12 +90,12 @@ fn Cartridge! parse(File* file) {
         }
         default: {
             io::printfn("Unsupported cartridge type: %s", type);
-            return CartError.UNSUPPORTED_CART_TYPE?;
+            return UNSUPPORTED_CART_TYPE?;
         }
     }
 }
 
-fn uint! parse_ram_size(char code) {
+fn uint? parse_ram_size(char code) {
     switch (code) {
         case 0x00: return 0x0000;
         case 0x02: return 0x2000;
@@ -107,7 +104,7 @@ fn uint! parse_ram_size(char code) {
         case 0x05: return 0x10000;
         default: 
             io::printfn("bad ram size code: 0x%02x", code);
-            return CartError.BAD_CART_TYPE?;
+            return BAD_CART_TYPE?;
     }
 }
 
