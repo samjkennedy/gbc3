@@ -26,17 +26,13 @@ struct Cpu {
 
 fn Cpu init() {
     return (Cpu) {
-        0,      //clk
-        0x01B0, //af
-        0x0013, //bc
-        0x00D8, //de
-        0x014D, //hl
-        0xFFFE, //sp
-        0x0100, //pc
-        CpuState.FETCH, //state
-        0,      //cycles
-        false,  //ime ready
-        false   //ime
+        .af = 0x01B0,
+        .bc = 0x0013,
+        .de = 0x00D8,
+        .hl = 0x014D,
+        .sp = 0xFFFE,
+        .pc = 0x0100,
+        .state = CpuState.FETCH,
     };
 }
 
