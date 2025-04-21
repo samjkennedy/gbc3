@@ -211,7 +211,6 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
         if (last_x == x_pos) {
             continue;
         }
-        last_x = x_pos;
  
         // LY + 16 must be greater than or equal to Sprite Y-Position
         if (scanline + 16 < y_pos) {
@@ -225,14 +224,15 @@ fn void Ppu.oam_scan(&self, Mmu* mmu, char scanline) {
 
         self.object_buffer[buffer_object_count] = addr;
         buffer_object_count++;
+        last_x = x_pos;
     }
 }
 
 fn void Ppu.draw_scanline(&self, Mmu* mmu, char ly) {
 
-    bool background = false;
+    bool background = true;
     bool window = true;
-    bool obj = false;
+    bool obj = true;
 
     char lcdc = mmu.read_unchecked(mmu::LCDC_REGISTER);
 
@@ -263,14 +263,15 @@ fn void Ppu.draw_bg_line(&self, Mmu* mmu, ushort screen_y) {
     const char TILES_PER_LINE = 32;
 
     for (ushort screen_x = 0; screen_x < 256; screen_x += 8) {
-        //Scroll the screen
+        //Scroll the screen coords rather than the bg
         char scrolled_y = (char)screen_y + self.scroll_y;
         char scrolled_x = (char)screen_x + self.scroll_x;
 
         char tile_row = scrolled_y / TILE_LENGTH; //row of the tile on the screen
         char tile_col = scrolled_x / TILE_LENGTH; //col of the tile on the screen
 
-        char tile_y = scrolled_y % TILE_LENGTH; //the row of pixels in the tile itself
+        char tile_y = scrolled_y % TILE_LENGTH; //the y coord of pixels in the tile itself
+        char tile_x = scrolled_x % TILE_LENGTH; //the y coord of pixels in the tile itself
 
         //Get address index of the current tile
         ushort bg_tile_data_area_start = util::is_bit_set(lcdc, 3)
@@ -289,26 +290,10 @@ fn void Ppu.draw_bg_line(&self, Mmu* mmu, ushort screen_y) {
 
             ushort offset = (screen_y * 256u16) + screen_x + x;
 
-            // if (x == 0 || screen_y % 8 == 0) {
-            //     self.pixels[offset] = 0xFFFF00FF;
-            //     continue;
-            // }
-
-            char pixel = pixel_row[x];
-            char value = (palette_data & (0b11 << (2 * pixel))) >> (2 * pixel);
-
-            switch (value) {
-                case 0: self.pixels[offset] = DEFAULT_GB_PALETTE.white;
-                case 1: self.pixels[offset] = DEFAULT_GB_PALETTE.light;
-                case 2: self.pixels[offset] = DEFAULT_GB_PALETTE.dark;
-                case 3: self.pixels[offset] = DEFAULT_GB_PALETTE.black;
-                default: self.pixels[offset] = 0xFFFF00FF;
-            }
-            
+            self.pixels[offset] = ppu::get_palette_colour(pixel_row[x], palette_data);
         } 
     }
 }
-
 
 fn void Ppu.draw_window_line(&self, Mmu* mmu, ushort screen_y) {
 
@@ -331,14 +316,14 @@ fn void Ppu.draw_window_line(&self, Mmu* mmu, ushort screen_y) {
     }
 
     for (ushort screen_x = 0; screen_x < 256; screen_x += 8) {
-        //Scroll the screen
+        //Scroll the screen coords rather than the window
         char scrolled_y = (char)screen_y - wy;
-        char scrolled_x = (char)screen_x - wx - 7;
+        char scrolled_x = (char)screen_x - wx + 7;
 
         char tile_row = scrolled_y / TILE_LENGTH; //row of the tile on the screen
         char tile_col = scrolled_x / TILE_LENGTH; //col of the tile on the screen
 
-        char tile_y = scrolled_y % TILE_LENGTH; //the row of pixels in the tile itself
+        char tile_y = scrolled_y % TILE_LENGTH; //the y coord of pixels in the tile itself
 
         //Get address index of the current tile
         ushort window_tile_data_area_start = util::is_bit_set(lcdc, 6)
@@ -348,7 +333,7 @@ fn void Ppu.draw_window_line(&self, Mmu* mmu, ushort screen_y) {
 
         ushort address = window_tile_data_area_start + tile_idx;
 
-        //Get the tile index
+        //Get the tile id
         char tile_id = mmu.read_unchecked(address);
 
         char[8] pixel_row = get_tile_row(mmu, addressing_mode, tile_id, tile_y);
@@ -357,22 +342,7 @@ fn void Ppu.draw_window_line(&self, Mmu* mmu, ushort screen_y) {
 
             ushort offset = (screen_y * 256u16) + screen_x + x;
 
-            // if (x == 0 || screen_y % 8 == 0) {
-            //     self.pixels[offset] = 0xFFFF00FF;
-            //     continue;
-            // }
-
-            char pixel = pixel_row[x];
-            char value = (palette_data & (0b11 << (2 * pixel))) >> (2 * pixel);
-
-            switch (value) {
-                case 0: self.pixels[offset] = DEFAULT_GB_PALETTE.white;
-                case 1: self.pixels[offset] = DEFAULT_GB_PALETTE.light;
-                case 2: self.pixels[offset] = DEFAULT_GB_PALETTE.dark;
-                case 3: self.pixels[offset] = DEFAULT_GB_PALETTE.black;
-                default: self.pixels[offset] = 0xFFFF00FF;
-            }
-            
+            self.pixels[offset] = ppu::get_palette_colour(pixel_row[x], palette_data);
         } 
     }
 }
@@ -396,7 +366,7 @@ fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
         if (is16x8) {
             //Bit 0 of tile index for 8x16 objects should be ignored
             tile_index &= 0b1111_1110;
-            if (scanline >= y_pos) {
+            if (scanline >= y_pos + 8) {
                 tile_index++;
             }
         }
@@ -423,7 +393,7 @@ fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
         bool x_flip = util::is_bit_set(attributes, 5);
         
         char y = scanline - (y_pos - 16);
-        char row = y_flip ? is16x8 ? 15 - y : 7 - y : y;
+        char row = y_flip ? (is16x8 ? 15 - y : 7 - y) : y;
 
         char[8] tile_row = get_tile_row(mmu, AddressingMode.MODE_8000, tile_index, row);
         
@@ -442,6 +412,20 @@ fn void Ppu.draw_objects(&self, Mmu* mmu, char scanline) {
                 }
             }
         }
+    }
+}
+
+fn uint get_palette_colour(char pixel, char palette_data) {
+    
+    char value = (palette_data & (0b11 << (2 * pixel))) >> (2 * pixel);
+
+    switch (value) {
+        //TODO: allow changing the palette colours
+        case 0:  return DEFAULT_GB_PALETTE.white;
+        case 1:  return DEFAULT_GB_PALETTE.light;
+        case 2:  return DEFAULT_GB_PALETTE.dark;
+        case 3:  return DEFAULT_GB_PALETTE.black;
+        default: return 0xFFFF00FF;
     }
 }
 
