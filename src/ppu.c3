@@ -18,16 +18,7 @@ struct Ppu {
 }
 
 fn Ppu init() {
-    return Ppu {
-        .pixels = {},
-        .object_buffer = {},
-        .bg_tile = {},
-        .scroll_x = 0,
-        .scroll_y = 0,
-        .mode = PpuMode.OAM_SCAN,
-        .remaining_dots = 80,
-        .current_x = 0,
-    };
+    return (Ppu) { {}, {}, {}, 0, 0, PpuMode.OAM_SCAN, 80, 0 };
 }
 
 struct Palette {
@@ -38,7 +29,7 @@ struct Palette {
 }
 
 //TODO: allow custom palettes from the user
-const Palette DEFAULT_GB_PALETTE = Palette {
+const Palette DEFAULT_GB_PALETTE = (Palette) {
     .white  = 0xFFD0F8E0,
     .light  = 0xFF90D4AC,
     .dark   = 0xFF566834,
