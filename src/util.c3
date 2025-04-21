@@ -5,5 +5,5 @@ fn char get_bit(char value, char bit) {
 }
 
 fn bool is_bit_set(char value, char bit) {
-    return get_bit(value, bit) > 0;
+    return (value & (1 << bit)) != 0;
 }

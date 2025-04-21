@@ -58,6 +58,8 @@ fn void! main(String[] args)
     };
     rl::Texture2D texture = rl::loadTextureFromImage(image);
 
+    // bool paused = false;
+
     rl::setTargetFPS(60); //Technically should be 59.7 but we'll burn that bridge when we come to it
     for (int t = 0; !rl::windowShouldClose(); t++) @pool() {
 
@@ -69,13 +71,9 @@ fn void! main(String[] args)
         if (t % DOTS_PER_FRAME == 0) {
             rl::@drawing() {
                 rl::clearBackground(rl::Color {0xE0, 0xF8, 0xD0, 0xFF});
+                // rl::clearBackground(rl::BLACK);
 
                 rl::updateTexture(texture, (void*)&ppu.pixels);
-
-                char scroll_y = mmu.read(mmu::SCY_REGISTER);
-                char scroll_x = mmu.read(mmu::SCX_REGISTER);
-
-                rl::setTextureWrap(texture, 0);
 
                 rl::drawTexturePro(
                     texture, 
